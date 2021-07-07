@@ -1,6 +1,6 @@
 import RobotDART as Rd
 import numpy as np
-from math import cos, sin, isnan
+from math import cos, sin, degrees
 from machin.frame.algorithms import PPO
 from machin.utils.logging import default_logger as logger
 import torch
@@ -15,20 +15,20 @@ class Actor(torch.nn.Module):
         super().__init__()
 
         self.fc1 = torch.nn.Linear(state_dim, 16)
-        print("edo0", self.fc1.weight)
         self.fc2 = torch.nn.Linear(16, 16)
-        self.fc3 = torch.nn.Linear(16, action_num)
+
+        self.mu_head = torch.nn.Linear(16, action_num)
+        self.sigma_head = torch.nn.Linear(16, action_num)
+
         self.action_range = action_range
-        self.old_weight = None
 
     def forward(self, state, action=None):
         a = torch.relu(self.fc1(state))
-
-        w = self.fc1.weight
-
         a = torch.relu(self.fc2(a))
-        mu = self.fc3(a)
-        sigma = torch.nn.functional.softplus(self.fc3(a))
+
+        mu = self.mu_head(a)
+        sigma = torch.nn.functional.softplus(self.sigma_head(a))
+
         dist = torch.distributions.Normal(mu, sigma)
         act = action if action is not None else dist.rsample()
         act_entropy = dist.entropy()
@@ -69,9 +69,9 @@ class Simulation:
         self.simu.set_collision_detector("fcl")
 
         gconfig = Rd.gui.GraphicsConfiguration(1024, 768)
-        graphics = Rd.gui.Graphics(gconfig)
-        #self.simu.set_graphics(graphics)
-        #graphics.look_at([1, 0, 1])
+        self.graphics = Rd.gui.Graphics(gconfig)
+        # self.simu.set_graphics(self.graphics)
+        # self.graphics.look_at([1, 0, 1])
 
         # load pendulum
         self.pendulum = Rd.Robot("pendulum.urdf")
@@ -92,14 +92,14 @@ class Simulation:
         self.pendulum.set_commands(velocity)
 
         for _ in range(20):
-            if pendulum_simulation.simu.step_world():
+            if self.simu.step_world():
                 break
 
         theta = self.pendulum.positions()[0]
 
         # reward = np.sign(cos(theta)) * (1 - abs(sin(theta))) * 10
         # reward = -10 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0]) * (1 - abs(cos(theta)))
-        reward = 5 * cos(theta) - 10 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
+        reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
         next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
         done = False
 
@@ -116,13 +116,17 @@ class Simulation:
 
         return starting_state
 
+    def enable_graphics(self):
+        self.simu.set_graphics(self.graphics)
+        self.graphics.look_at([1, 0, 1])
+
 
 if __name__ == '__main__':
     # configurations
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
-    action_range = 4    # action range is [-2, 2]
+    action_range = 4
     max_episodes = 500
     max_steps = 100
     solved_reward = 500
@@ -134,29 +138,32 @@ if __name__ == '__main__':
     ppo = PPO(actor,
               critic,
               torch.optim.Adam,
-              torch.nn.MSELoss(reduction='sum')
+              torch.nn.MSELoss(reduction='sum'),
+              actor_learning_rate=0.00001,
+              critic_learning_rate=0.00001
               )
 
     reward_fulfilled = 0
     smoothed_total_reward = 0.0
 
-    for episode in range(1, max_episodes):
+    m_angle = 0
+
+    for episode in range(1, max_episodes + 1):
         episode_reward = 0.0
         terminal = False
         step = 0
         state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, state_dim)
-        action = None
+
+
         tmp_observations = []
+
         while not terminal and step < max_steps:
             step += 1
-
-            #if episode % 2 == 0:
-                #pendulum_simulation.render()    # pop-up a GUI of the environment in each 20th episode
 
             with torch.no_grad():
                 # Observe the state of the environment and take action
                 # Take random actions in the first 20 episodes
-                if episode < 10:
+                if episode < 20:
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)[0]
                     torque = action
                 else:
@@ -178,14 +185,17 @@ if __name__ == '__main__':
 
                 state = next_state
 
-            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
+        angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360
+        angle = angle if angle <= 180 else 360 - angle
+        if episode > 400:
+            m_angle += angle / 100
+        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
 
         print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
-        if episode > 10:
+        if episode > 20:
             ppo.store_episode(tmp_observations)
-            print("edo1", actor.fc1.weight)
             ppo.update()
 
         if smoothed_total_reward > solved_reward:
@@ -196,3 +206,5 @@ if __name__ == '__main__':
                 exit(0)
         else:
             reward_fulfilled = 0
+
+    print(m_angle)
