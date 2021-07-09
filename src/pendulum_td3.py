@@ -4,6 +4,8 @@ from math import cos, sin, degrees
 from machin.frame.algorithms import PPO
 from machin.utils.logging import default_logger as logger
 import torch
+from machin.frame.algorithms import TD3
+import torch.nn as nn
 
 
 def atanh(x):
@@ -11,15 +13,13 @@ def atanh(x):
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, state_dim, action_num):
+    def __init__(self, state_dim, action_dim, action_range):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 16)
-        self.fc2 = torch.nn.Linear(16, 16)
-
-        self.mu_head = torch.nn.Linear(16, action_num)
-        self.sigma_head = torch.nn.Linear(16, action_num)
-
+        self.fc1 = nn.Linear(state_dim, 16)
+        self.fc2 = nn.Linear(16, 16)
+        self.mu_head = nn.Linear(16, action_dim)
+        self.sigma_head = nn.Linear(16, action_dim)
         self.action_range = action_range
 
     def forward(self, state, action=None):
@@ -47,19 +47,20 @@ class Actor(torch.nn.Module):
 
 
 class Critic(torch.nn.Module):
-    def __init__(self, state_dim):
+    def __init__(self, state_dim, action_dim):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 16)
-        self.fc2 = torch.nn.Linear(16, 16)
-        self.fc3 = torch.nn.Linear(16, 1)
+        self.fc1 = nn.Linear(state_dim + action_dim, 16)
+        self.fc2 = nn.Linear(16, 16)
+        self.fc3 = nn.Linear(16, 1)
 
-    def forward(self, state):
-        v = torch.relu(self.fc1(state))
-        v = torch.relu(self.fc2(v))
-        v = self.fc3(v)
-
-        return v
+    def forward(self, state, action):
+        # print(type(action))
+        state_action = torch.cat((state, action), 1)  # how
+        q = torch.relu(self.fc1(state_action))
+        q = torch.relu(self.fc2(q))
+        q = self.fc3(q)
+        return q
 
 
 class Simulation:
@@ -128,22 +129,34 @@ if __name__ == '__main__':
     action_dim = 1
     action_range = 4
     max_episodes = 500
-    max_steps = 100
+    max_steps = 200
     solved_reward = 500
-    solved_repeat = 15
+    solved_repeat = 5
 
-    actor = Actor(state_dim, action_dim)
-    critic = Critic(state_dim)
+    # td3 specific
+    observe_dim = 2
+    noise_param = (0, 0.2)
+    noise_mode = "normal"
 
-    ppo = PPO(actor,
-              critic,
-              torch.optim.Adam,
-              torch.nn.MSELoss(reduction='sum'),
-              actor_learning_rate=0.00001,
-              critic_learning_rate=0.00001
-              )
+    actor = Actor(observe_dim, action_dim, action_range)
+    actor_t = Actor(observe_dim, action_dim, action_range)
+    critic = Critic(observe_dim, action_dim)
+    critic_t = Critic(observe_dim, action_dim)
+    critic2 = Critic(observe_dim, action_dim)
+    critic2_t = Critic(observe_dim, action_dim)
 
-    reward_fulfilled = 0
+    td3 = TD3(
+        actor,
+        actor_t,
+        critic,
+        critic_t,
+        critic2,
+        critic2_t,
+        torch.optim.Adam,
+        nn.MSELoss(reduction="sum"),
+    )
+
+    episode, step, reward_fulfilled = 0, 0, 0
     smoothed_total_reward = 0.0
 
     m_angle = 0
@@ -152,8 +165,7 @@ if __name__ == '__main__':
         episode_reward = 0.0
         terminal = False
         step = 0
-        state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, state_dim)
-
+        state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, observe_dim)
 
         tmp_observations = []
 
@@ -167,35 +179,46 @@ if __name__ == '__main__':
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)[0]
                     torque = action
                 else:
-                    action = ppo.act({"state": state})[0][0]
+                    # print("Test")
+                    action = td3.act_with_noise(
+                        {"state": state}, noise_param=noise_param, mode=noise_mode
+                    )[0][0]
                     torque = action
-
                 next_state, reward, terminal = pendulum_simulation.step(torque)
-                next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
+                next_state = torch.tensor(next_state, dtype=torch.float32).view(1, observe_dim)
                 episode_reward += reward
+
+                # next_state, reward, terminal = pendulum_simulation.step(torque)
+                # next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
+                # episode_reward += reward
 
                 tmp_observations.append({
                     "state": {"state": state},
                     "action": {"action": action},
-                    "next_state": {"state": next_state},
+                    "next_state": {"state": state},
                     "reward": reward,
                     "terminal": terminal or step == max_steps,
                 }
                 )
 
                 state = next_state
-        ppo.store_episode(tmp_observations)  # this should be here. Not after the first 20 episodes.
-        angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360
-        angle = angle if angle <= 180 else 360 - angle
+        print("Test")
+        td3.store_episode(tmp_observations)  # this should be here to take the first 20 random episodes into
+        # consideration ?
+        print("Test")
+
+        angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
+        angle = angle if angle <= 180 else 360 - angle  # get the distance in radians from the goal [0,180)
         if episode > 400:
-            m_angle += angle / 100
+            m_angle += angle / 100  # get an average from the last 100 episodes
         print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
 
         print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
         if episode > 20:
-            ppo.update()
+            # td3.store_episode(tmp_observations)
+            td3.update()
 
         if smoothed_total_reward > solved_reward:
             reward_fulfilled += 1
