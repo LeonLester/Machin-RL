@@ -179,33 +179,23 @@ if __name__ == '__main__':
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)[0]
                     torque = action
                 else:
-                    # print("Test")
-                    action = td3.act_with_noise(
-                        {"state": state}, noise_param=noise_param, mode=noise_mode
-                    )[0][0]
-                    torque = action
+                    action = td3.act({"state": state})[0]
+                    torque = action[0]
+
                 next_state, reward, terminal = pendulum_simulation.step(torque)
                 next_state = torch.tensor(next_state, dtype=torch.float32).view(1, observe_dim)
                 episode_reward += reward
 
-                # next_state, reward, terminal = pendulum_simulation.step(torque)
-                # next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
-                # episode_reward += reward
-
                 tmp_observations.append({
-                    "state": {"state": state},
-                    "action": {"action": action},
-                    "next_state": {"state": state},
-                    "reward": reward,
-                    "terminal": terminal or step == max_steps,
-                }
+                        "state": {"state": state},
+                        "action": {"action": action},
+                        "next_state": {"state": state},
+                        "reward": reward,
+                        "terminal": terminal or step == max_steps,
+                    }
                 )
 
                 state = next_state
-        print("Test")
-        td3.store_episode(tmp_observations)  # this should be here to take the first 20 random episodes into
-        # consideration ?
-        print("Test")
 
         angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
         angle = angle if angle <= 180 else 360 - angle  # get the distance in radians from the goal [0,180)
@@ -217,7 +207,7 @@ if __name__ == '__main__':
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
         if episode > 20:
-            # td3.store_episode(tmp_observations)
+            td3.store_episode(tmp_observations)
             td3.update()
 
         if smoothed_total_reward > solved_reward:
