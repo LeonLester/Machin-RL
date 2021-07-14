@@ -62,6 +62,9 @@ class Critic(torch.nn.Module):
         q = self.fc3(q)
         return q
 
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
 
 class Simulation:
     def __init__(self):
@@ -89,7 +92,7 @@ class Simulation:
 
         self.pendulum.set_commands(np.array([3]))
 
-    def step(self, velocity):
+    def step(self, velocity, state):
         self.pendulum.set_commands(velocity)
 
         for _ in range(20):
@@ -100,8 +103,21 @@ class Simulation:
 
         # reward = np.sign(cos(theta)) * (1 - abs(sin(theta))) * 10
         # reward = -10 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0]) * (1 - abs(cos(theta)))
-        reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
+        # reward = 20 * cos(theta) - 5 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
+
         next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
+        # 3 part reward function
+        # 1.
+        # 2. reduce reward the further that the next state's mechanical energy is from
+        # being only potential energy which means that it should be as inverted as possible and as motionless as
+        # possible
+        # 3. increase reward as the last state's mechanical energy is the same. 2 and 3 ensure promote that
+        # we want it to get close to inverted and still, without promoting getting away from it
+
+        reward = 25 * np.exp(-1 * (next_state[0] - 1) * (next_state[0] - 1) / 0.001) \
+                 - 100 * np.abs(10 * 0.5 - (10 * 0.5 * next_state[0] + 0.5 * 0.3333 * next_state[1] * next_state[1])) \
+                 + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
+        reward = reward.item()
         done = False
 
         return next_state, reward, done
@@ -127,7 +143,7 @@ if __name__ == '__main__':
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
-    action_range = 4
+    action_range = 5
     max_episodes = 500
     max_steps = 200
     solved_reward = 500
@@ -154,6 +170,8 @@ if __name__ == '__main__':
         critic2_t,
         torch.optim.Adam,
         nn.MSELoss(reduction="sum"),
+        actor_learning_rate=0.00001,
+        critic_learning_rate=0.00001
     )
 
     episode, step, reward_fulfilled = 0, 0, 0
@@ -176,23 +194,33 @@ if __name__ == '__main__':
                 # Observe the state of the environment and take action
                 # Take random actions in the first 20 episodes
                 if episode < 20:
-                    action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)[0]
+                    action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)
                     torque = action
                 else:
                     action = td3.act({"state": state})[0]
                     torque = action[0]
 
-                next_state, reward, terminal = pendulum_simulation.step(torque)
+                next_state, reward, terminal = pendulum_simulation.step(torque, state)
                 next_state = torch.tensor(next_state, dtype=torch.float32).view(1, observe_dim)
+                # Customised reward function
+                # rew = 25 * np.exp(-1 * (next_state[0, 0] - 1) * (next_state[0, 0] - 1) / 0.001) \
+                #       - 100 * np.abs(
+                #     10 * 0.5 - (10 * 0.5 * next_state[0, 0] + 0.5 * 0.3333 * next_state[0, 1] * next_state[0, 1])) \
+                #       + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
+                # print(test)
+                # reward = 25 * np.exp(-1 * (next_state[0, 0] - 1) * (next_state[0, 0] - 1) / 0.001) - 100 * np.abs(10 * 0.5 - (
+                #             10 * 0.5 * next_state[0, 0] + 0.5 * 0.3333 * next_state[0, 2] * next_state[
+                #         0, 2])) + 100 * np.abs(
+                #     10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 2] * state[0, 2]))
                 episode_reward += reward
 
                 tmp_observations.append({
-                        "state": {"state": state},
-                        "action": {"action": action},
-                        "next_state": {"state": state},
-                        "reward": reward,
-                        "terminal": terminal or step == max_steps,
-                    }
+                    "state": {"state": state},
+                    "action": {"action": action},
+                    "next_state": {"state": state},
+                    "reward": reward,
+                    "terminal": terminal or step == max_steps,
+                }
                 )
 
                 state = next_state
@@ -205,9 +233,8 @@ if __name__ == '__main__':
 
         print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
-
+        td3.store_episode(tmp_observations)
         if episode > 20:
-            td3.store_episode(tmp_observations)
             td3.update()
 
         if smoothed_total_reward > solved_reward:
