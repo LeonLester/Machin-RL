@@ -3,6 +3,8 @@ import numpy as np
 from math import cos, sin, degrees
 from machin.frame.algorithms import PPO
 import torch
+from retry import retry
+import pandas as pd
 
 
 class Actor(torch.nn.Module):
@@ -114,17 +116,18 @@ class Simulation:
         self.graphics.look_at([1, 0, 1])
 
 
-if __name__ == '__main__':
+@retry(Exception, tries=3, delay=0, backoff=0)
+def ppo_sim(print_flag, max_episodes, max_steps):
     # configurations
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
     action_range = 4
-    max_episodes = 500
-    max_steps = 100
+    # max_episodes = 500
+    # max_steps = 100
     solved_reward = 500
     solved_repeat = 15
-
+    data = []  # for each episode's data
     actor = Actor(state_dim, action_dim)
     critic = Critic(state_dim)
 
@@ -188,9 +191,13 @@ if __name__ == '__main__':
         if episode > max_episodes - 100:
             m_angle += angle / 100
 
-        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
-
-        print("", end="\n")
+        if print_flag:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
+            print("", end="\n")
+        else:
+            data_curr = [episode, episode_reward, angle]
+            data.append(data_curr)
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
         if episode > 20:
@@ -205,4 +212,12 @@ if __name__ == '__main__':
         else:
             reward_fulfilled = 0
 
-    print(m_angle)
+    if print_flag:
+        print(m_angle)
+    else:
+        data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        return data_df
+
+
+if __name__ == '__main__':
+    ppo_sim(1, 200, 200)

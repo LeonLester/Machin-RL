@@ -6,6 +6,8 @@ from machin.utils.logging import default_logger as logger
 import torch
 from machin.frame.algorithms import TD3
 import torch.nn as nn
+import pandas as pd
+from retry import retry
 
 
 def atanh(x):
@@ -134,8 +136,8 @@ class Simulation:
         self.graphics.look_at([1, 0, 1])
 
 
-if __name__ == '__main__':
-    # configurations
+@retry(Exception, tries=3, delay=0, backoff=0)
+def td3_sim(print_flag, max_episodes, max_steps):
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
@@ -144,7 +146,7 @@ if __name__ == '__main__':
     max_steps = 200
     solved_reward = 500
     solved_repeat = 15
-
+    data = []  # for each episode's data
     # td3 specific
     observe_dim = 2
     noise_param = (0, 0.2)
@@ -206,7 +208,7 @@ if __name__ == '__main__':
                 tmp_observations.append({
                     "state": {"state": state},
                     "action": {"action": action},
-                    "next_state": {"state": state},
+                    "next_state": {"state": next_state},
                     "reward": reward,
                     "terminal": terminal or step == max_steps,
                 }
@@ -220,16 +222,19 @@ if __name__ == '__main__':
 
         if episode > max_episodes - 100:
             m_angle += angle / 100  # get an average from the last 100 episodes
-
         print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
 
-        print("", end="\n")
+        # either print on its own or collect data in a dataframe to use for plotting in graphs.py
+        if print_flag:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
+            print("", end="\n")
+        else:
+            data_curr = [episode, episode_reward, angle]
+            data.append(data_curr)
+
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
         td3.store_episode(tmp_observations)
-        if episode > 20:
-
-        td3.store_episode(tmp_observations)
-
         if episode > 20:
             td3.update()
 
@@ -237,9 +242,15 @@ if __name__ == '__main__':
             reward_fulfilled += 1
 
             if reward_fulfilled >= solved_repeat:
-                print("Environment solved!")
+                if print_flag:
+                    print("Environment solved!")
                 exit(0)
         else:
             reward_fulfilled = 0
+    if print_flag:
+        data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        return data_df
 
-    print(m_angle)
+
+if __name__ == '__main__':
+    td3_sim(1, 200, 200)

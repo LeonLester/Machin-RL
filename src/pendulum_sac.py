@@ -3,6 +3,8 @@ import numpy as np
 from math import cos, sin, degrees
 from machin.frame.algorithms import SAC
 import torch
+import pandas as pd
+from retry import retry
 
 
 class Actor(torch.nn.Module):
@@ -112,17 +114,18 @@ class Simulation:
         return starting_state
 
 
-if __name__ == '__main__':
+@retry(Exception, tries=3, delay=0, backoff=0)
+def sac_sim(print_flag, max_episodes, max_steps):
     # configurations
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
     action_range = 7
-    max_episodes = 500
-    max_steps = 200
+    # max_episodes = 500
+    # max_steps = 200
     solved_reward = 500
     solved_repeat = 500
-
+    data = []  # for each episode's data
     actor = Actor(state_dim, action_dim, action_range)
     critic = Critic(state_dim, action_dim)
     critic_t = Critic(state_dim, action_dim)
@@ -174,12 +177,12 @@ if __name__ == '__main__':
                 episode_reward += reward
 
                 tmp_observations.append({
-                        "state": {"state": state},
-                        "action": {"action": action},
-                        "next_state": {"state": state},
-                        "reward": reward,
-                        "terminal": terminal or step == max_steps,
-                    }
+                    "state": {"state": state},
+                    "action": {"action": action},
+                    "next_state": {"state": next_state},
+                    "reward": reward,
+                    "terminal": terminal or step == max_steps,
+                }
                 )
 
                 state = next_state
@@ -188,15 +191,20 @@ if __name__ == '__main__':
             current_angle = current_angle if current_angle <= 180 else 360 - current_angle
             angle += current_angle / max_steps
 
+        sac.store_episode(tmp_observations)
+
         if episode > max_episodes - 100:
             m_angle += angle / 100
 
-        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
+        if print_flag:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
+            print("", end="\n")
+        else:
+            data_curr = [episode, episode_reward, angle]
+            data.append(data_curr)
 
-        print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
-
-        sac.store_episode(tmp_observations)
 
         if episode > 20:
             sac.update()
@@ -210,4 +218,12 @@ if __name__ == '__main__':
         else:
             reward_fulfilled = 0
 
-    print(m_angle)
+    if print_flag:
+        print(m_angle)
+    else:
+        data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        return data_df
+
+
+if __name__ == '__main__':
+    sac_sim(1, 100, 100)
