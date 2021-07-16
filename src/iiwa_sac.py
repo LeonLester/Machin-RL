@@ -3,7 +3,7 @@ import numpy as np
 from machin.frame.algorithms import SAC
 from math import sqrt
 import torch
-# from retry import retry
+from retry import retry
 import pandas as pd
 
 
@@ -116,7 +116,7 @@ class Simulation:
         return starting_state
 
 
-#@retry(Exception, tries=3, delay=0, backoff=0)
+@retry(Exception, tries=5, delay=0, backoff=0)
 def sac_sim(print_flag, max_episodes, max_steps):
     iiwa_simulation = Simulation()
     state_dim = 7

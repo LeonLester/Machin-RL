@@ -116,7 +116,7 @@ class Simulation:
         self.graphics.look_at([1, 0, 1])
 
 
-@retry(Exception, tries=3, delay=0, backoff=0)
+@retry(Exception, tries=5, delay=0, backoff=0)
 def ppo_sim(print_flag, max_episodes, max_steps):
     # configurations
     pendulum_simulation = Simulation()
@@ -217,6 +217,7 @@ def ppo_sim(print_flag, max_episodes, max_steps):
         print(m_angle)
     else:
         data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        print(m_angle)
         return data_df
 
 

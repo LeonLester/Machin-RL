@@ -136,7 +136,7 @@ class Simulation:
         self.graphics.look_at([1, 0, 1])
 
 
-@retry(Exception, tries=3, delay=0, backoff=0)
+@retry(Exception, tries=5, delay=0, backoff=0)
 def td3_sim(print_flag, max_episodes, max_steps):
     pendulum_simulation = Simulation()
     state_dim = 2
@@ -229,6 +229,8 @@ def td3_sim(print_flag, max_episodes, max_steps):
                   end="\r")
             print("", end="\n")
         else:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
             data_curr = [episode, episode_reward, angle]
             data.append(data_curr)
 
@@ -248,6 +250,7 @@ def td3_sim(print_flag, max_episodes, max_steps):
             reward_fulfilled = 0
     if print_flag:
         data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        print(m_angle)
         return data_df
 
 

@@ -114,7 +114,7 @@ class Simulation:
         return starting_state
 
 
-@retry(Exception, tries=3, delay=0, backoff=0)
+@retry(Exception, tries=5, delay=0, backoff=0)
 def sac_sim(print_flag, max_episodes, max_steps):
     # configurations
     pendulum_simulation = Simulation()
@@ -201,6 +201,8 @@ def sac_sim(print_flag, max_episodes, max_steps):
                   end="\r")
             print("", end="\n")
         else:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
             data_curr = [episode, episode_reward, angle]
             data.append(data_curr)
 
@@ -222,6 +224,7 @@ def sac_sim(print_flag, max_episodes, max_steps):
         print(m_angle)
     else:
         data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
+        print(m_angle)
         return data_df
 
 
