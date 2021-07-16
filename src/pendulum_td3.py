@@ -142,8 +142,8 @@ def td3_sim(print_flag, max_episodes, max_steps):
     state_dim = 2
     action_dim = 1
     action_range = 4
-    max_episodes = 500
-    max_steps = 200
+    # max_episodes = 500
+    # max_steps = 200
     solved_reward = 500
     solved_repeat = 15
     data = []  # for each episode's data
@@ -222,7 +222,6 @@ def td3_sim(print_flag, max_episodes, max_steps):
 
         if episode > max_episodes - 100:
             m_angle += angle / 100  # get an average from the last 100 episodes
-        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
 
         # either print on its own or collect data in a dataframe to use for plotting in graphs.py
         if print_flag:

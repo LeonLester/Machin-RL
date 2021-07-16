@@ -3,6 +3,8 @@ import numpy as np
 from machin.frame.algorithms import PPO
 from math import sqrt
 import torch
+from retry import retry
+import pandas as pd
 
 
 class Actor(torch.nn.Module):
@@ -113,15 +115,17 @@ class Simulation:
         return starting_state
 
 
-if __name__ == '__main__':
+@retry(Exception, tries=3, delay=0, backoff=0)
+def ppo_sim(print_flag, max_episodes, max_steps):
     iiwa_simulation = Simulation()
     state_dim = 7
     action_dim = 7
     action_range = 2
-    max_episodes = 500
-    max_steps = 200
+    # max_episodes = 500
+    # max_steps = 200
     solved_reward = 500
     solved_repeat = 500
+    data = []  # to get each episode's data
 
     actor = Actor(state_dim, action_dim)
     critic = Critic(state_dim)
@@ -164,19 +168,23 @@ if __name__ == '__main__':
                 episode_reward += reward
 
                 tmp_observations.append({
-                        "state": {"state": state},
-                        "action": {"action": action},
-                        "next_state": {"state": state},
-                        "reward": reward,
-                        "terminal": terminal or step == max_steps,
-                    }
+                    "state": {"state": state},
+                    "action": {"action": action},
+                    "next_state": {"state": state},
+                    "reward": reward,
+                    "terminal": terminal or step == max_steps,
+                }
                 )
 
                 state = next_state
 
-        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
+        if print_flag:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
+            print("", end="\n")
+        else:
+            data_curr = [episode, episode_reward]
+            data.append(data_curr)
 
-        print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
         ppo.store_episode(tmp_observations)
@@ -192,3 +200,13 @@ if __name__ == '__main__':
                 exit(0)
         else:
             reward_fulfilled = 0
+
+        if print_flag:
+            continue
+        else:
+            data_df = pd.DataFrame(data, columns=['Episode', 'Reward'])
+            return data_df
+
+
+if __name__ == '__main__':
+    ppo_sim(1, 100, 200)

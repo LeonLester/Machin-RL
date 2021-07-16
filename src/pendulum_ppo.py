@@ -123,6 +123,7 @@ def ppo_sim(print_flag, max_episodes, max_steps):
     state_dim = 2
     action_dim = 1
     action_range = 4
+    gamma = 0.95
     # max_episodes = 500
     # max_steps = 100
     solved_reward = 500
