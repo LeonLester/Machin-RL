@@ -1,21 +1,18 @@
 import RobotDART as Rd
 import numpy as np
-from math import cos, sin, degrees
-import torch
 from machin.frame.algorithms import TD3
-import torch.nn as nn
+from math import sqrt
+import torch
 
 
 class Actor(torch.nn.Module):
     def __init__(self, state_dim, action_dim, action_range):
         super().__init__()
 
-        self.fc1 = nn.Linear(state_dim, 16)
-        self.fc2 = nn.Linear(16, 16)
-
-        self.mu_head = nn.Linear(16, action_dim)
-        self.sigma_head = nn.Linear(16, action_dim)
-
+        self.fc1 = torch.nn.Linear(state_dim, 16)
+        self.fc2 = torch.nn.Linear(16, 16)
+        self.mu_head = torch.nn.Linear(16, action_dim)
+        self.sigma_head = torch.nn.Linear(16, action_dim)
         self.action_range = action_range
 
     def forward(self, state, action=None):
@@ -46,12 +43,12 @@ class Critic(torch.nn.Module):
     def __init__(self, state_dim, action_dim):
         super().__init__()
 
-        self.fc1 = nn.Linear(state_dim + action_dim, 16)
-        self.fc2 = nn.Linear(16, 16)
-        self.fc3 = nn.Linear(16, 1)
+        self.fc1 = torch.nn.Linear(state_dim + action_dim, 16)
+        self.fc2 = torch.nn.Linear(16, 16)
+        self.fc3 = torch.nn.Linear(16, 1)
 
     def forward(self, state, action):
-        state_action = torch.cat((state, action), 1)
+        state_action = torch.cat((state, action), 1)  # how
         q = torch.relu(self.fc1(state_action))
         q = torch.relu(self.fc2(q))
         q = self.fc3(q)
@@ -68,68 +65,62 @@ class Simulation:
         gconfig = Rd.gui.GraphicsConfiguration(1024, 768)
         self.graphics = Rd.gui.Graphics(gconfig)
         # self.simu.set_graphics(self.graphics)
-        # self.graphics.look_at([1, 0, 1])
+        # self.graphics.look_at([3., 1., 2.], [0., 0., 0.])
 
-        # load pendulum
-        self.pendulum = Rd.Robot("pendulum.urdf")
-        self.pendulum.fix_to_world()
-        self.pendulum.set_actuator_types("torque")
+        # load iiwa
+        packages = [("iiwa_description", "iiwa/iiwa_description")]
+        self.iiwa = Rd.Robot("iiwa/iiwa.urdf", packages)
+        self.iiwa.fix_to_world()
+        self.iiwa.set_actuator_types("servo")
 
-        # set its initial position as the lowest possible
-        positions = self.pendulum.positions()
-        positions[0] = 0
-        self.pendulum.set_positions(positions)
+        positions = self.iiwa.positions()
+        self.iiwa.set_positions(positions)
+
+        robot_ghost = self.iiwa.clone_ghost()
+
+        initial_positions = [1, 0.8, -1.12, -1.47, 1.02, -0.45, 0.91]
+        self.iiwa.set_positions(initial_positions)
 
         # add robot to the simulation
-        self.simu.add_robot(self.pendulum)
+        self.simu.add_robot(self.iiwa)
+        self.simu.add_robot(robot_ghost)
+        self.simu.add_floor()
 
-        self.pendulum.set_commands(np.array([3]))
-
-    def step(self, velocity):
-        self.pendulum.set_commands(velocity)
+    def step(self, positions):
+        self.iiwa.set_commands(positions)
 
         for _ in range(20):
             if self.simu.step_world():
                 break
 
-        theta = self.pendulum.positions()[0]
+        next_state = (self.iiwa.positions())
 
-        reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
-        next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
+        reward = 0
+        for pos in next_state:
+            reward += pos * pos
+        reward = - sqrt(reward)
+
         done = False
 
         return next_state, reward, done
 
     # reset the simulation
     def reset(self):
-        positions = self.pendulum.positions()
-        positions[0] = np.pi
-        self.pendulum.set_external_torque(self.pendulum.body_name(1), [0., 0., 0.])
-        self.pendulum.set_positions(positions)
-
-        starting_state = (positions[0], self.pendulum.velocities()[0])
+        starting_state = [1, 0.8, -1.12, -1.47, 1.02, -0.45, 0.91]
+        self.iiwa.set_positions(starting_state)
 
         return starting_state
 
-    def enable_graphics(self):
-        self.simu.set_graphics(self.graphics)
-        self.graphics.look_at([1, 0, 1])
-
 
 if __name__ == '__main__':
-    # configurations
-    pendulum_simulation = Simulation()
-    state_dim = 2
-    action_dim = 1
-    action_range = 4
+    iiwa_simulation = Simulation()
+    state_dim = 7
+    action_dim = 7
+    action_range = 2
     max_episodes = 500
     max_steps = 200
     solved_reward = 500
-    solved_repeat = 15
-
-    # td3 specific
-    noise_param = (0, 0.2)
-    noise_mode = "normal"
+    solved_repeat = 500
 
     actor = Actor(state_dim, action_dim, action_range)
     actor_t = Actor(state_dim, action_dim, action_range)
@@ -146,23 +137,20 @@ if __name__ == '__main__':
         critic2,
         critic2_t,
         torch.optim.Adam,
-        nn.MSELoss(reduction="sum"),
-        batch_size=100
+        torch.nn.MSELoss(reduction="sum"),
+        batch_size=40
     )
 
-    episode, step, reward_fulfilled = 0, 0, 0
+    reward_fulfilled = 0
     smoothed_total_reward = 0.0
-
-    m_angle = 0
 
     for episode in range(1, max_episodes + 1):
         episode_reward = 0.0
         terminal = False
         step = 0
-        state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, state_dim)
+        state = torch.tensor(iiwa_simulation.reset(), dtype=torch.float32).view(1, state_dim)
 
         tmp_observations = []
-        angle = 0
 
         while not terminal and step < max_steps:
             step += 1
@@ -171,13 +159,13 @@ if __name__ == '__main__':
                 # Observe the state of the environment and take action
                 # Take random actions in the first 20 episodes
                 if episode < 20:
-                    action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)
-                    torque = action
+                    action = ((2.0 * torch.rand(1, 7) - 1.0) * action_range)
+                    torque = np.transpose(action)
                 else:
-                    action = td3.act_with_noise({"state": state}, noise_param=noise_param, mode=noise_mode)[0]
-                    torque = action[0]
+                    action = td3.act({"state": state})[0]
+                    torque = np.transpose(action)
 
-                next_state, reward, terminal = pendulum_simulation.step(torque)
+                next_state, reward, terminal = iiwa_simulation.step(torque)
                 next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
                 episode_reward += reward
 
@@ -192,14 +180,7 @@ if __name__ == '__main__':
 
                 state = next_state
 
-            current_angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
-            current_angle = current_angle if current_angle <= 180 else 360 - current_angle  # get the distance in radians from the goal [0,180)
-            angle += current_angle / max_steps
-
-        if episode > max_episodes - 100:
-            m_angle += angle / 100  # get an average from the last 100 episodes
-
-        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
+        print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
 
         print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
@@ -217,5 +198,3 @@ if __name__ == '__main__':
                 exit(0)
         else:
             reward_fulfilled = 0
-
-    print(m_angle)
