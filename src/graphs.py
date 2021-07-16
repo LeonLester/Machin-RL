@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
 # file imports
 import iiwa_ppo
 import iiwa_sac
@@ -9,9 +10,10 @@ import pendulum_ppo
 import pendulum_sac
 import pendulum_td3
 import time
+import csv
 
-max_episodes = 500
-max_steps = 200
+max_episodes = 100
+max_steps = 100
 repeat = 5
 
 
@@ -54,6 +56,10 @@ def pendulum_stuff():
     plt.show()
     plt.savefig('pendulum_boxplots.png')
 
+    with open("pendulum_data.csv", "wb") as f:
+        writer = csv.writer(f)
+        writer.writerows(pendulum_times)
+
 
 def iiwa_stuff():
     td3_times_iiwa = []
@@ -90,6 +96,10 @@ def iiwa_stuff():
 
     plt.show()
     plt.savefig('iiwa_boxplots.png')
+
+    with open("iiwa_data.csv", "wb") as f:
+        writer = csv.writer(f)
+        writer.writerows(iiwa_times)
 
 
 pendulum_stuff()

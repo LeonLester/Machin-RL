@@ -1,8 +1,6 @@
 import RobotDART as Rd
 import numpy as np
 from math import cos, sin, degrees
-from machin.frame.algorithms import PPO
-from machin.utils.logging import default_logger as logger
 import torch
 from machin.frame.algorithms import TD3
 import torch.nn as nn
