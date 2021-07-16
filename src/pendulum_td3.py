@@ -18,8 +18,10 @@ class Actor(torch.nn.Module):
 
         self.fc1 = nn.Linear(state_dim, 16)
         self.fc2 = nn.Linear(16, 16)
+
         self.mu_head = nn.Linear(16, action_dim)
         self.sigma_head = nn.Linear(16, action_dim)
+
         self.action_range = action_range
 
     def forward(self, state, action=None):
@@ -55,15 +57,12 @@ class Critic(torch.nn.Module):
         self.fc3 = nn.Linear(16, 1)
 
     def forward(self, state, action):
-        # print(type(action))
-        state_action = torch.cat((state, action), 1)  # how
+        state_action = torch.cat((state, action), 1)
         q = torch.relu(self.fc1(state_action))
         q = torch.relu(self.fc2(q))
         q = self.fc3(q)
-        return q
 
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+        return q
 
 
 class Simulation:
@@ -92,7 +91,7 @@ class Simulation:
 
         self.pendulum.set_commands(np.array([3]))
 
-    def step(self, velocity, state):
+    def step(self, velocity):
         self.pendulum.set_commands(velocity)
 
         for _ in range(20):
@@ -101,10 +100,7 @@ class Simulation:
 
         theta = self.pendulum.positions()[0]
 
-        # reward = np.sign(cos(theta)) * (1 - abs(sin(theta))) * 10
-        # reward = -10 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0]) * (1 - abs(cos(theta)))
-        # reward = 20 * cos(theta) - 5 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
-
+        reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
         next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
         # 3 part reward function
         # 1.
@@ -114,10 +110,10 @@ class Simulation:
         # 3. increase reward as the last state's mechanical energy is the same. 2 and 3 ensure promote that
         # we want it to get close to inverted and still, without promoting getting away from it
 
-        reward = 25 * np.exp(-1 * (next_state[0] - 1) * (next_state[0] - 1) / 0.001) \
-                 - 100 * np.abs(10 * 0.5 - (10 * 0.5 * next_state[0] + 0.5 * 0.3333 * next_state[1] * next_state[1])) \
-                 + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
-        reward = reward.item()
+        # reward = 25 * np.exp(-1 * (next_state[0] - 1) * (next_state[0] - 1) / 0.001) \
+        #          - 100 * np.abs(10 * 0.5 - (10 * 0.5 * next_state[0] + 0.5 * 0.3333 * next_state[1] * next_state[1])) \
+        #          + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
+        # reward = reward.item()
         done = False
 
         return next_state, reward, done
@@ -143,23 +139,23 @@ if __name__ == '__main__':
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
-    action_range = 5
+    action_range = 4
     max_episodes = 500
     max_steps = 200
     solved_reward = 500
-    solved_repeat = 5
+    solved_repeat = 15
 
     # td3 specific
     observe_dim = 2
     noise_param = (0, 0.2)
     noise_mode = "normal"
 
-    actor = Actor(observe_dim, action_dim, action_range)
-    actor_t = Actor(observe_dim, action_dim, action_range)
-    critic = Critic(observe_dim, action_dim)
-    critic_t = Critic(observe_dim, action_dim)
-    critic2 = Critic(observe_dim, action_dim)
-    critic2_t = Critic(observe_dim, action_dim)
+    actor = Actor(state_dim, action_dim, action_range)
+    actor_t = Actor(state_dim, action_dim, action_range)
+    critic = Critic(state_dim, action_dim)
+    critic_t = Critic(state_dim, action_dim)
+    critic2 = Critic(state_dim, action_dim)
+    critic2_t = Critic(state_dim, action_dim)
 
     td3 = TD3(
         actor,
@@ -170,6 +166,7 @@ if __name__ == '__main__':
         critic2_t,
         torch.optim.Adam,
         nn.MSELoss(reduction="sum"),
+        batch_size=100,
         actor_learning_rate=0.00001,
         critic_learning_rate=0.00001
     )
@@ -183,9 +180,10 @@ if __name__ == '__main__':
         episode_reward = 0.0
         terminal = False
         step = 0
-        state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, observe_dim)
+        state = torch.tensor(pendulum_simulation.reset(), dtype=torch.float32).view(1, state_dim)
 
         tmp_observations = []
+        angle = 0
 
         while not terminal and step < max_steps:
             step += 1
@@ -197,21 +195,12 @@ if __name__ == '__main__':
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)
                     torque = action
                 else:
-                    action = td3.act({"state": state})[0]
+                    action = td3.act_with_noise({"state": state}, noise_param=noise_param, mode=noise_mode)[0]
                     torque = action[0]
 
-                next_state, reward, terminal = pendulum_simulation.step(torque, state)
-                next_state = torch.tensor(next_state, dtype=torch.float32).view(1, observe_dim)
-                # Customised reward function
-                # rew = 25 * np.exp(-1 * (next_state[0, 0] - 1) * (next_state[0, 0] - 1) / 0.001) \
-                #       - 100 * np.abs(
-                #     10 * 0.5 - (10 * 0.5 * next_state[0, 0] + 0.5 * 0.3333 * next_state[0, 1] * next_state[0, 1])) \
-                #       + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
-                # print(test)
-                # reward = 25 * np.exp(-1 * (next_state[0, 0] - 1) * (next_state[0, 0] - 1) / 0.001) - 100 * np.abs(10 * 0.5 - (
-                #             10 * 0.5 * next_state[0, 0] + 0.5 * 0.3333 * next_state[0, 2] * next_state[
-                #         0, 2])) + 100 * np.abs(
-                #     10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 2] * state[0, 2]))
+                next_state, reward, terminal = pendulum_simulation.step(torque)
+                next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
+
                 episode_reward += reward
 
                 tmp_observations.append({
@@ -225,15 +214,22 @@ if __name__ == '__main__':
 
                 state = next_state
 
-        angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
-        angle = angle if angle <= 180 else 360 - angle  # get the distance in radians from the goal [0,180)
-        if episode > 400:
+            current_angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
+            current_angle = current_angle if current_angle <= 180 else 360 - current_angle  # get the distance in radians from the goal [0,180)
+            angle += current_angle / max_steps
+
+        if episode > max_episodes - 100:
             m_angle += angle / 100  # get an average from the last 100 episodes
+
         print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}", end="\r")
 
         print("", end="\n")
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
         td3.store_episode(tmp_observations)
+        if episode > 20:
+
+        td3.store_episode(tmp_observations)
+
         if episode > 20:
             td3.update()
 
