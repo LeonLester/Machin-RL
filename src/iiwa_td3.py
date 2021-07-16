@@ -3,7 +3,7 @@ import numpy as np
 from machin.frame.algorithms import TD3
 from math import sqrt
 import torch
-from retry import retry
+# from retry import retry
 import pandas as pd
 
 
@@ -114,7 +114,7 @@ class Simulation:
         return starting_state
 
 
-@retry(Exception, tries=3, delay=0, backoff=0)
+#@retry(Exception, tries=3, delay=0, backoff=0)
 def td3_sim(print_flag, max_episodes, max_steps):
     iiwa_simulation = Simulation()
     state_dim = 7
@@ -183,7 +183,7 @@ def td3_sim(print_flag, max_episodes, max_steps):
 
                 state = next_state
 
-        if print_flag:
+        if print_flag or True:
             print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
             print("", end="\n")
         else:
@@ -206,11 +206,9 @@ def td3_sim(print_flag, max_episodes, max_steps):
         else:
             reward_fulfilled = 0
 
-        if print_flag:
-            continue
-        else:
-            data_df = pd.DataFrame(data, columns=['Episode', 'Reward'])
-            return data_df
+    if not print_flag:
+        data_df = pd.DataFrame(data, columns=['Episode', 'Reward'])
+        return data_df
 
 
 if __name__ == '__main__':

@@ -201,11 +201,9 @@ def ppo_sim(print_flag, max_episodes, max_steps):
         else:
             reward_fulfilled = 0
 
-        if print_flag:
-            continue
-        else:
-            data_df = pd.DataFrame(data, columns=['Episode', 'Reward'])
-            return data_df
+    if not print_flag:
+        data_df = pd.DataFrame(data, columns=['Episode', 'Reward'])
+        return data_df
 
 
 if __name__ == '__main__':
