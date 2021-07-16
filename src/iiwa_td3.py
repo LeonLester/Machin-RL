@@ -183,7 +183,7 @@ def td3_sim(print_flag, max_episodes, max_steps):
 
                 state = next_state
 
-        if print_flag or True:
+        if print_flag:
             print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f}", end="\r")
             print("", end="\n")
         else:
