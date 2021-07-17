@@ -1,23 +1,23 @@
 import RobotDART as Rd
 import numpy as np
 from math import cos, sin, degrees
-from machin.frame.algorithms import PPO
+from machin.frame.algorithms import SAC
 import torch
-from retry import retry
 import pandas as pd
+from retry import retry
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, state_dim, action_num):
+    def __init__(self, state_dim, action_num, action_range):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 4)
-        self.fc2 = torch.nn.Linear(4, 4)
+        self.fc1 = torch.nn.Linear(state_dim, 16)
+        self.fc2 = torch.nn.Linear(16, 4)
 
         self.mu_head = torch.nn.Linear(4, action_num)
         self.sigma_head = torch.nn.Linear(4, action_num)
 
-        self.action_range = 4
+        self.action_range = action_range
 
     def forward(self, state, action=None):
         a = torch.relu(self.fc1(state))
@@ -44,19 +44,20 @@ class Actor(torch.nn.Module):
 
 
 class Critic(torch.nn.Module):
-    def __init__(self, state_dim):
+    def __init__(self, state_dim, action_dim):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 16)
+        self.fc1 = torch.nn.Linear(state_dim + action_dim, 16)
         self.fc2 = torch.nn.Linear(16, 16)
         self.fc3 = torch.nn.Linear(16, 1)
 
-    def forward(self, state):
-        v = torch.relu(self.fc1(state))
-        v = torch.relu(self.fc2(v))
-        v = self.fc3(v)
+    def forward(self, state, action):
+        state_action = torch.cat([state, action], 1)
+        q = torch.relu(self.fc1(state_action))
+        q = torch.relu(self.fc2(q))
+        q = self.fc3(q)
 
-        return v
+        return q
 
 
 class Simulation:
@@ -93,9 +94,10 @@ class Simulation:
                 break
 
         theta = self.pendulum.positions()[0]
+        vel = self.pendulum.velocities()[0]
 
-        reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
-        next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
+        next_state = (theta, vel)
+        reward = 5 * (cos(theta)) - 20 * np.sign(sin(theta)) * np.sign(vel)
         done = False
 
         return next_state, reward, done
@@ -111,35 +113,37 @@ class Simulation:
 
         return starting_state
 
-    def enable_graphics(self):
-        self.simu.set_graphics(self.graphics)
-        self.graphics.look_at([1, 0, 1])
-
 
 @retry(Exception, tries=5, delay=0, backoff=0)
-def ppo_sim(print_flag, max_episodes, max_steps):
+def sac_sim(print_flag, max_episodes, max_steps):
     # configurations
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
-    action_range = 4
-    gamma = 0.95
+    action_range = 7
     # max_episodes = 500
-    # max_steps = 100
+    # max_steps = 200
     solved_reward = 500
-    solved_repeat = 15
+    solved_repeat = 500
     data = []  # for each episode's data
-    actor = Actor(state_dim, action_dim)
-    critic = Critic(state_dim)
+    actor = Actor(state_dim, action_dim, action_range)
+    critic = Critic(state_dim, action_dim)
+    critic_t = Critic(state_dim, action_dim)
+    critic2 = Critic(state_dim, action_dim)
+    critic2_t = Critic(state_dim, action_dim)
 
-    ppo = PPO(actor,
-              critic,
-              torch.optim.Adam,
-              torch.nn.MSELoss(reduction='sum'),
-              actor_learning_rate=0.0001,
-              critic_learning_rate=0.0001,
-              batch_size=50
-              )
+    sac = SAC(
+        actor,
+        critic,
+        critic_t,
+        critic2,
+        critic2_t,
+        torch.optim.Adam,
+        torch.nn.MSELoss(reduction="sum"),
+        actor_learning_rate=0.0001,
+        critic_learning_rate=0.0001,
+        batch_size=5
+    )
 
     reward_fulfilled = 0
     smoothed_total_reward = 0.0
@@ -165,7 +169,7 @@ def ppo_sim(print_flag, max_episodes, max_steps):
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)
                     torque = action
                 else:
-                    action = ppo.act({"state": state})[0]
+                    action = sac.act({"state": state})[0]
                     torque = action[0]
 
                 next_state, reward, terminal = pendulum_simulation.step(torque)
@@ -187,7 +191,7 @@ def ppo_sim(print_flag, max_episodes, max_steps):
             current_angle = current_angle if current_angle <= 180 else 360 - current_angle
             angle += current_angle / max_steps
 
-        ppo.store_episode(tmp_observations)  # this should be here. Not after the first 20 episodes.
+        sac.store_episode(tmp_observations)
 
         if episode > max_episodes - 100:
             m_angle += angle / 100
@@ -197,12 +201,15 @@ def ppo_sim(print_flag, max_episodes, max_steps):
                   end="\r")
             print("", end="\n")
         else:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
             data_curr = [episode, episode_reward, angle]
             data.append(data_curr)
+
         smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
         if episode > 20:
-            ppo.update()
+            sac.update()
 
         if smoothed_total_reward > solved_reward:
             reward_fulfilled += 1
@@ -222,4 +229,4 @@ def ppo_sim(print_flag, max_episodes, max_steps):
 
 
 if __name__ == '__main__':
-    ppo_sim(1, 200, 200)
+    sac_sim(1, 100, 100)

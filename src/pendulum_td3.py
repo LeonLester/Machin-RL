@@ -1,23 +1,28 @@
 import RobotDART as Rd
 import numpy as np
 from math import cos, sin, degrees
-from machin.frame.algorithms import PPO
 import torch
-from retry import retry
+from machin.frame.algorithms import TD3
+import torch.nn as nn
 import pandas as pd
+from retry import retry
+
+
+def atanh(x):
+    return 0.5 * torch.log((1 + x) / (1 - x))
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, state_dim, action_num):
+    def __init__(self, state_dim, action_dim, action_range):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 4)
-        self.fc2 = torch.nn.Linear(4, 4)
+        self.fc1 = nn.Linear(state_dim, 16)
+        self.fc2 = nn.Linear(16, 16)
 
-        self.mu_head = torch.nn.Linear(4, action_num)
-        self.sigma_head = torch.nn.Linear(4, action_num)
+        self.mu_head = nn.Linear(16, action_dim)
+        self.sigma_head = nn.Linear(16, action_dim)
 
-        self.action_range = 4
+        self.action_range = action_range
 
     def forward(self, state, action=None):
         a = torch.relu(self.fc1(state))
@@ -44,19 +49,20 @@ class Actor(torch.nn.Module):
 
 
 class Critic(torch.nn.Module):
-    def __init__(self, state_dim):
+    def __init__(self, state_dim, action_dim):
         super().__init__()
 
-        self.fc1 = torch.nn.Linear(state_dim, 16)
-        self.fc2 = torch.nn.Linear(16, 16)
-        self.fc3 = torch.nn.Linear(16, 1)
+        self.fc1 = nn.Linear(state_dim + action_dim, 16)
+        self.fc2 = nn.Linear(16, 16)
+        self.fc3 = nn.Linear(16, 1)
 
-    def forward(self, state):
-        v = torch.relu(self.fc1(state))
-        v = torch.relu(self.fc2(v))
-        v = self.fc3(v)
+    def forward(self, state, action):
+        state_action = torch.cat((state, action), 1)
+        q = torch.relu(self.fc1(state_action))
+        q = torch.relu(self.fc2(q))
+        q = self.fc3(q)
 
-        return v
+        return q
 
 
 class Simulation:
@@ -96,6 +102,18 @@ class Simulation:
 
         reward = 5 * cos(theta) - 20 * np.sign(sin(theta)) * np.sign(self.pendulum.velocities()[0])
         next_state = (self.pendulum.positions()[0], self.pendulum.velocities()[0])
+        # 3 part reward function
+        # 1.
+        # 2. reduce reward the further that the next state's mechanical energy is from
+        # being only potential energy which means that it should be as inverted as possible and as motionless as
+        # possible
+        # 3. increase reward as the last state's mechanical energy is the same. 2 and 3 ensure promote that
+        # we want it to get close to inverted and still, without promoting getting away from it
+
+        # reward = 25 * np.exp(-1 * (next_state[0] - 1) * (next_state[0] - 1) / 0.001) \
+        #          - 100 * np.abs(10 * 0.5 - (10 * 0.5 * next_state[0] + 0.5 * 0.3333 * next_state[1] * next_state[1])) \
+        #          + 100 * np.abs(10 * 0.5 - (10 * 0.5 * state[0, 0] + 0.5 * 0.3333 * state[0, 1] * state[0, 1]))
+        # reward = reward.item()
         done = False
 
         return next_state, reward, done
@@ -117,31 +135,43 @@ class Simulation:
 
 
 @retry(Exception, tries=5, delay=0, backoff=0)
-def ppo_sim(print_flag, max_episodes, max_steps):
-    # configurations
+def td3_sim(print_flag, max_episodes, max_steps):
     pendulum_simulation = Simulation()
     state_dim = 2
     action_dim = 1
     action_range = 4
-    gamma = 0.95
     # max_episodes = 500
-    # max_steps = 100
+    # max_steps = 200
     solved_reward = 500
     solved_repeat = 15
     data = []  # for each episode's data
-    actor = Actor(state_dim, action_dim)
-    critic = Critic(state_dim)
+    # td3 specific
+    observe_dim = 2
+    noise_param = (0, 0.2)
+    noise_mode = "normal"
 
-    ppo = PPO(actor,
-              critic,
-              torch.optim.Adam,
-              torch.nn.MSELoss(reduction='sum'),
-              actor_learning_rate=0.0001,
-              critic_learning_rate=0.0001,
-              batch_size=50
-              )
+    actor = Actor(state_dim, action_dim, action_range)
+    actor_t = Actor(state_dim, action_dim, action_range)
+    critic = Critic(state_dim, action_dim)
+    critic_t = Critic(state_dim, action_dim)
+    critic2 = Critic(state_dim, action_dim)
+    critic2_t = Critic(state_dim, action_dim)
 
-    reward_fulfilled = 0
+    td3 = TD3(
+        actor,
+        actor_t,
+        critic,
+        critic_t,
+        critic2,
+        critic2_t,
+        torch.optim.Adam,
+        nn.MSELoss(reduction="sum"),
+        batch_size=100,
+        actor_learning_rate=0.00001,
+        critic_learning_rate=0.00001
+    )
+
+    episode, step, reward_fulfilled = 0, 0, 0
     smoothed_total_reward = 0.0
 
     m_angle = 0
@@ -165,11 +195,12 @@ def ppo_sim(print_flag, max_episodes, max_steps):
                     action = ((2.0 * torch.rand(1, 1) - 1.0) * action_range)
                     torque = action
                 else:
-                    action = ppo.act({"state": state})[0]
+                    action = td3.act_with_noise({"state": state}, noise_param=noise_param, mode=noise_mode)[0]
                     torque = action[0]
 
                 next_state, reward, terminal = pendulum_simulation.step(torque)
                 next_state = torch.tensor(next_state, dtype=torch.float32).view(1, state_dim)
+
                 episode_reward += reward
 
                 tmp_observations.append({
@@ -183,43 +214,43 @@ def ppo_sim(print_flag, max_episodes, max_steps):
 
                 state = next_state
 
-            current_angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360
-            current_angle = current_angle if current_angle <= 180 else 360 - current_angle
+            current_angle = degrees(pendulum_simulation.pendulum.positions()[0]) % 360  # get the angle of the pendulum
+            current_angle = current_angle if current_angle <= 180 else 360 - current_angle  # get the distance in radians from the goal [0,180)
             angle += current_angle / max_steps
 
-        ppo.store_episode(tmp_observations)  # this should be here. Not after the first 20 episodes.
-
         if episode > max_episodes - 100:
-            m_angle += angle / 100
+            m_angle += angle / 100  # get an average from the last 100 episodes
 
+        # either print on its own or collect data in a dataframe to use for plotting in graphs.py
         if print_flag:
             print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
                   end="\r")
             print("", end="\n")
         else:
+            print(f"Episode: [{episode:3d}/{max_episodes:3d}] Reward: {episode_reward:.2f} Angle: {angle:.2f}",
+                  end="\r")
             data_curr = [episode, episode_reward, angle]
             data.append(data_curr)
-        smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
 
+        smoothed_total_reward = smoothed_total_reward * 0.9 + episode_reward * 0.1
+        td3.store_episode(tmp_observations)
         if episode > 20:
-            ppo.update()
+            td3.update()
 
         if smoothed_total_reward > solved_reward:
             reward_fulfilled += 1
 
             if reward_fulfilled >= solved_repeat:
-                print("Environment solved!")
+                if print_flag:
+                    print("Environment solved!")
                 exit(0)
         else:
             reward_fulfilled = 0
-
     if print_flag:
-        print(m_angle)
-    else:
         data_df = pd.DataFrame(data, columns=['Episode', 'Reward', 'Angle'])
         print(m_angle)
         return data_df
 
 
 if __name__ == '__main__':
-    ppo_sim(1, 200, 200)
+    td3_sim(1, 200, 200)
