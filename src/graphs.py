@@ -103,5 +103,5 @@ def iiwa_stuff():
         writer.writerows(iiwa_times)
 
 
-pendulum_stuff()
+# pendulum_stuff()
 iiwa_stuff()
