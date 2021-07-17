@@ -91,11 +91,18 @@ def iiwa_stuff():
         print("SAC done")
 
     iiwa_times = [td3_times_iiwa, ppo_times_iiwa, sac_times_iiwa]
+
     fig = plt.figure()
+    fig.suptitle('Iiwa', fontsize=14, fontweight='bold')
 
-    plt.boxplot(iiwa_times)
+    ax = fig.add_subplot(111)
+    ax.boxplot(iiwa_times)
 
-    plt.show()
+    ax.set_xlabel('Algorithms')
+    ax.set_ylabel('Seconds')
+
+    plt.xticks([1, 2, 3], ['TD3', 'PPO', 'SAC'])
+    plt.gcf()
     plt.savefig('iiwa_boxplots.png')
 
     with open("csv/iiwa_data" + str(repeat) + ".csv", "w") as f:
